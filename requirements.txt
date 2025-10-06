@@ -1,0 +1,12 @@
+# Core dependencies
+psycopg2-binary>=2.9.0,<3.0.0
+
+# Development and testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# CLI and configuration
+toml>=0.10.2

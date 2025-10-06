@@ -9,6 +9,7 @@ import pytest
 import os
 import tempfile
 import tarfile
+import io
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 
@@ -78,7 +79,7 @@ class TestProcessSingleTarball:
                 for filename, content in test_files.items():
                     info = tarfile.TarInfo(filename)
                     info.size = len(content)
-                    tar.addfile(info, fileobj=tempfile.BytesIO(content))
+                    tar.addfile(info, fileobj=io.BytesIO(content))
         
         try:
             # Process tarball

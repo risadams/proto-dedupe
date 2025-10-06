@@ -17,9 +17,9 @@ from ..services.duplicate_service import DuplicateService
 from ..services.database_service import DatabaseService
 from ..services.hash_service import HashService
 
-# Global service instances
+# Global service instances - these persist across CLI calls in tests
 _tarball_service = None
-_duplicate_service = None
+_duplicate_service = None  
 _database_service = None
 _hash_service = None
 
@@ -37,6 +37,14 @@ def get_services():
         _database_service = DatabaseService()
     
     return _tarball_service, _duplicate_service, _database_service, _hash_service
+
+def reset_services():
+    """Reset service instances - useful for testing."""
+    global _tarball_service, _duplicate_service, _database_service, _hash_service
+    _tarball_service = None
+    _duplicate_service = None
+    _database_service = None  
+    _hash_service = None
 
 
 def setup_logging(level: str = 'INFO'):
@@ -66,23 +74,24 @@ def process_command(args: argparse.Namespace) -> int:
     for tarball_path in args.files:
         if not os.path.exists(tarball_path):
             print(f"Error: File not found: {tarball_path}", file=sys.stderr)
-            continue
+            sys.exit(4)  # File processing error
         
         try:
             print(f"Processing {tarball_path}...")
             
             # Process the tarball
-            tarball_record = tarball_service.process_tarball(tarball_path, args.hostname)
+            tarball_record = tarball_service.process_tarball(tarball_path, args.hostname, args.hash_algorithm)
             file_records = tarball_service.get_extracted_files(tarball_record.id)
             
             if not args.dry_run:
                 # Save to database
                 database_service.save_tarball_record(tarball_record)
                 database_service.save_file_records(file_records)
-                
-                # Process for duplicates
-                duplicate_groups = duplicate_service.process_file_records(file_records)
-                
+            
+            # Process for duplicates (always run to show potential duplicates)
+            duplicate_groups = duplicate_service.process_file_records(file_records)
+            
+            if not args.dry_run:
                 # Save duplicate groups
                 for group in duplicate_groups:
                     database_service.save_duplicate_group(group)
@@ -92,6 +101,11 @@ def process_command(args: argparse.Namespace) -> int:
             
             print(f"✅ Processed {tarball_record.filename}: {len(file_records)} files")
             
+            # Show duplicate detection results
+            if duplicate_groups:
+                total_duplicates = sum(group.file_count for group in duplicate_groups)
+                print(f"   Found {len(duplicate_groups)} duplicate groups with {total_duplicates} files")
+            
             if args.dry_run:
                 print(f"   (Dry run - no data saved)")
             
@@ -100,7 +114,7 @@ def process_command(args: argparse.Namespace) -> int:
             
         except Exception as e:
             print(f"❌ Error processing {tarball_path}: {e}", file=sys.stderr)
-            continue
+            sys.exit(4)  # File processing error
     
     print(f"\nProcessing complete: {success_count} tarballs, {total_files} files total")
     return 0 if success_count > 0 else 1
@@ -253,9 +267,20 @@ def create_parser() -> argparse.ArgumentParser:
         help='Hostname where tarballs originated'
     )
     process_parser.add_argument(
+        '--hash-algorithm',
+        choices=['sha256', 'sha1', 'md5', 'sha512'],
+        default='sha256',
+        help='Hash algorithm to use'
+    )
+    process_parser.add_argument(
         '--dry-run',
         action='store_true',
         help='Analyze without saving to database'
+    )
+    process_parser.add_argument(
+        '--progress',
+        action='store_true',
+        help='Show detailed progress during processing'
     )
     process_parser.add_argument(
         'files',

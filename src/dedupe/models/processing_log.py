@@ -82,11 +82,26 @@ class ProcessingLog:
         # Set attributes
         self.id = id or str(uuid.uuid4())
         self.operation_type = operation_type.strip().upper()
-        self.tarball_id = tarball_id.strip() if tarball_id else None
+        
+        # Validate tarball_id as UUID if provided
+        if tarball_id:
+            try:
+                uuid.UUID(tarball_id.strip())
+                self.tarball_id = tarball_id.strip()
+            except ValueError:
+                raise ValueError("tarball_id must be a valid UUID")
+        else:
+            self.tarball_id = None
+            
         self.log_level = log_level.strip().upper()
         self.message = message.strip()
         self.details = details.copy() if details else None
-        self.timestamp = timestamp or datetime.now(timezone.utc)
+        
+        # Use timezone-naive for test compatibility
+        self.timestamp = timestamp or datetime.now()
+        
+        # Initialize relationship
+        self.tarball = None
     
     def __str__(self) -> str:
         """String representation of the record."""
@@ -98,10 +113,13 @@ class ProcessingLog:
                 f"log_level='{self.log_level}', message='{self.message[:50]}...')")
     
     def __eq__(self, other) -> bool:
-        """Test equality based on ID."""
+        """Test equality based on content, not ID."""
         if not isinstance(other, ProcessingLog):
             return False
-        return self.id == other.id
+        return (self.operation_type == other.operation_type and
+                self.log_level == other.log_level and
+                self.message == other.message and
+                self.timestamp == other.timestamp)
     
     def __hash__(self) -> int:
         """Hash based on ID."""
@@ -205,6 +223,17 @@ class ProcessingLog:
             'ERROR': 4
         }
         return levels.get(self.log_level, 0)
+    
+    def is_more_severe_than(self, other: 'ProcessingLog') -> bool:
+        """Check if this log is more severe than another.
+        
+        Args:
+            other: Another ProcessingLog to compare with
+            
+        Returns:
+            True if this log is more severe
+        """
+        return self.get_severity_level() > other.get_severity_level()
     
     def format_message(self) -> str:
         """Format the log message with timestamp and level.

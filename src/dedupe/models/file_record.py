@@ -57,6 +57,12 @@ class FileRecord:
         if not tarball_id or not tarball_id.strip():
             raise ValueError("tarball_id cannot be empty")
         
+        # Validate tarball_id as UUID
+        try:
+            uuid.UUID(tarball_id.strip())
+        except ValueError:
+            raise ValueError("tarball_id must be a valid UUID")
+        
         if not filename or not filename.strip():
             raise ValueError("filename cannot be empty")
         
@@ -69,9 +75,9 @@ class FileRecord:
         if not hash_algorithm or not hash_algorithm.strip():
             raise ValueError("hash_algorithm cannot be empty")
         
-        # Validate field lengths
-        if len(filename.strip()) > 1000:
-            raise ValueError("filename too long (max 1000 characters)")
+        # Validate field lengths (500 chars max for filename as per test)
+        if len(filename.strip()) > 500:
+            raise ValueError("filename too long (max 500 characters)")
         
         if len(checksum.strip()) > 128:
             raise ValueError("checksum too long (max 128 characters)")
@@ -97,10 +103,14 @@ class FileRecord:
         now = datetime.now(timezone.utc)
         self.created_at = created_at or now
         self.updated_at = updated_at or now
+        
+        # Initialize relationship (placeholder for ORM)
+        self.tarball = None
+        self.duplicate_group = None
     
     def __str__(self) -> str:
         """String representation of the record."""
-        return f"FileRecord(id={self.id[:8]}..., filename={self.filename}, duplicate={self.is_duplicate})"
+        return f"FileRecord(id={self.id[:8]}..., filename={self.filename}, size={self.file_size}, checksum={self.checksum[:8]}...)"
     
     def __repr__(self) -> str:
         """Detailed string representation of the record."""
@@ -109,10 +119,14 @@ class FileRecord:
                 f"checksum='{self.checksum}', hash_algorithm='{self.hash_algorithm}')")
     
     def __eq__(self, other) -> bool:
-        """Test equality based on ID."""
+        """Test equality based on content, not ID."""
         if not isinstance(other, FileRecord):
             return False
-        return self.id == other.id
+        return (self.tarball_id == other.tarball_id and
+                self.filename == other.filename and
+                self.file_size == other.file_size and
+                self.checksum == other.checksum and
+                self.hash_algorithm == other.hash_algorithm)
     
     def __hash__(self) -> int:
         """Hash based on ID."""

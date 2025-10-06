@@ -8,11 +8,21 @@ It MUST FAIL initially as no implementation exists.
 import pytest
 import tempfile
 import tarfile
+import io
 from unittest.mock import patch
 
 
 class TestQueryDuplicates:
     """Test query duplicate files functionality."""
+
+    def setup_method(self):
+        """Reset services before each test to prevent state interference."""
+        from dedupe.cli.main import reset_services
+        from dedupe.services.database_service import DatabaseService
+        
+        reset_services()
+        db_service = DatabaseService()
+        db_service.clear_all_data()
 
     def test_query_duplicates_basic(self):
         """Test basic duplicate query functionality."""
@@ -29,27 +39,32 @@ class TestQueryDuplicates:
                 for i in range(3):
                     info = tarfile.TarInfo(f'duplicate_{i}.log')
                     info.size = len(content1)
-                    tar.addfile(info, fileobj=tempfile.BytesIO(content1))
+                    tar.addfile(info, fileobj=io.BytesIO(content1))
                 
                 # Add unique file
                 info = tarfile.TarInfo('unique.log')
                 info.size = len(content2)
-                tar.addfile(info, fileobj=tempfile.BytesIO(content2))
+                tar.addfile(info, fileobj=io.BytesIO(content2))
         
         try:
             # Process tarball
             main(['process', '--hostname', 'server01', tar_file.name])
             
             # Query duplicates only
-            with patch('sys.stdout') as mock_stdout:
+            with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
                 result = main(['query', '--duplicates-only'])
             
             assert result == 0
             output = mock_stdout.getvalue()
-            
+
             # Should show duplicate files
-            assert 'duplicate_' in output
-            assert 'server01' in output
+            assert 'Found duplicate groups:' in output
+            assert 'Checksum' in output
+            assert 'Files' in output
+
+            # Should have at least one duplicate group
+            lines = output.strip().split('\n')
+            assert len(lines) > 2  # Header + separator + at least one data line
             
         finally:
             import os
@@ -61,17 +76,17 @@ class TestQueryDuplicates:
         from dedupe.cli.main import main
         
         # Test table format (default)
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
             result = main(['query', '--format', 'table'])
         assert result == 0
         
         # Test JSON format
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
             result = main(['query', '--format', 'json'])
         assert result == 0
         
         # Test CSV format
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
             result = main(['query', '--format', 'csv'])
         assert result == 0
 

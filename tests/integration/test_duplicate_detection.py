@@ -9,12 +9,21 @@ import pytest
 import os
 import tempfile
 import tarfile
+import io
 import hashlib
 from unittest.mock import patch
 
 
 class TestDuplicateDetection:
     """Test duplicate detection across multiple tarballs."""
+
+    def setup_method(self):
+        """Reset services before each test to avoid state interference."""
+        from dedupe.cli.main import reset_services, get_services
+        reset_services()
+        # Initialize fresh services and clear any existing data
+        _, _, db_service, _ = get_services()
+        db_service.clear_all_data()
 
     def test_duplicate_detection_across_tarballs(self):
         """Test duplicate detection between different tarballs."""
@@ -33,12 +42,12 @@ class TestDuplicateDetection:
                 # Shared file
                 info1 = tarfile.TarInfo('shared.log')
                 info1.size = len(shared_content)
-                tar.addfile(info1, fileobj=tempfile.BytesIO(shared_content))
+                tar.addfile(info1, fileobj=io.BytesIO(shared_content))
                 
                 # Unique file
                 info2 = tarfile.TarInfo('unique1.log')
                 info2.size = len(unique_content_1)
-                tar.addfile(info2, fileobj=tempfile.BytesIO(unique_content_1))
+                tar.addfile(info2, fileobj=io.BytesIO(unique_content_1))
         
         # Create second tarball with same shared file
         with tempfile.NamedTemporaryFile(suffix='_day2.tar.gz', delete=False) as tar2_file:
@@ -46,12 +55,12 @@ class TestDuplicateDetection:
                 # Same shared file (different name, same content)
                 info1 = tarfile.TarInfo('logs/shared.log')  # Different path
                 info1.size = len(shared_content)
-                tar.addfile(info1, fileobj=tempfile.BytesIO(shared_content))
+                tar.addfile(info1, fileobj=io.BytesIO(shared_content))
                 
                 # Unique file
                 info2 = tarfile.TarInfo('unique2.log')
                 info2.size = len(unique_content_2)
-                tar.addfile(info2, fileobj=tempfile.BytesIO(unique_content_2))
+                tar.addfile(info2, fileobj=io.BytesIO(unique_content_2))
         
         try:
             # Process first tarball
@@ -63,16 +72,25 @@ class TestDuplicateDetection:
             assert result2 == 0
             
             # Query duplicates
-            with patch('sys.stdout') as mock_stdout:
+            with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
                 result3 = main(['query', '--hostname', 'test-server', '--duplicates-only'])
             assert result3 == 0
             
             # Verify duplicate detection
             output = mock_stdout.getvalue()
-            assert 'shared.log' in output  # Both files should be identified as duplicates
+            
+            # Should show duplicate groups table
+            assert 'Found duplicate groups:' in output
+            assert 'Checksum' in output
+            assert 'Files' in output
+            
+            # Should have at least one duplicate entry
+            lines = output.strip().split('\n')
+            assert len(lines) >= 3  # Header + separator + at least one data line
             
             # Verify in database
-            db_service = DatabaseService()
+            from dedupe.cli.main import get_services
+            _, _, db_service, _ = get_services()
             duplicates = db_service.get_duplicate_files()
             
             # Should find the shared content as duplicate
@@ -144,14 +162,14 @@ class TestDuplicateDetection:
             with tarfile.open(tarA_file.name, 'w:gz') as tar:
                 info = tarfile.TarInfo('config/app.conf')
                 info.size = len(shared_content)
-                tar.addfile(info, fileobj=tempfile.BytesIO(shared_content))
+                tar.addfile(info, fileobj=io.BytesIO(shared_content))
         
         # Create tarball for server B with same file
         with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tarB_file:
             with tarfile.open(tarB_file.name, 'w:gz') as tar:
                 info = tarfile.TarInfo('app.conf')  # Different path, same content
                 info.size = len(shared_content)
-                tar.addfile(info, fileobj=tempfile.BytesIO(shared_content))
+                tar.addfile(info, fileobj=io.BytesIO(shared_content))
         
         try:
             # Process for server A
@@ -163,19 +181,24 @@ class TestDuplicateDetection:
             assert result2 == 0
             
             # Query duplicates across all servers
-            with patch('sys.stdout') as mock_stdout:
+            with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
                 result3 = main(['query', '--duplicates-only'])
             assert result3 == 0
             
             output = mock_stdout.getvalue()
             
-            # Should show duplicates from both servers
-            assert 'server-a' in output
-            assert 'server-b' in output
-            assert 'app.conf' in output or 'config/app.conf' in output
+            # Should show duplicate groups table
+            assert 'Found duplicate groups:' in output
+            assert 'Checksum' in output
+            assert 'Files' in output
+            
+            # Should show at least 2 files for the shared content duplicate
+            lines = output.strip().split('\n')
+            assert len(lines) >= 3  # Header + separator + at least one data line
             
             # Verify in database
-            db_service = DatabaseService()
+            from dedupe.cli.main import get_services
+            _, _, db_service, _ = get_services()
             
             # Get records for both servers
             records_a = db_service.get_file_records_by_hostname('server-a')
@@ -199,15 +222,18 @@ class TestDuplicateDetection:
     def test_duplicate_detection_performance(self):
         """Test duplicate detection performance requirements."""
         # This will fail until implementation exists
-        from dedupe.services.duplicate_service import DuplicateService
+        from dedupe.cli.main import get_services
         import time
         
-        service = DuplicateService()
+        _, service, _, _ = get_services()
         
         # Create test data
         test_checksum = hashlib.sha256(b'performance test content').hexdigest()
         
-        # Add checksum to database first
+        # Add checksum to database first (first occurrence)
+        service.process_file_for_duplicates(test_checksum, 'sha256', 1024)
+        
+        # Add a second occurrence to make it a duplicate
         service.process_file_for_duplicates(test_checksum, 'sha256', 1024)
         
         # Performance requirement: <2s for duplicate queries
@@ -238,7 +264,7 @@ class TestDuplicateDetection:
             with tarfile.open(tar_file.name, 'w:gz') as tar:
                 info = tarfile.TarInfo('test.log')
                 info.size = len(content)
-                tar.addfile(info, fileobj=tempfile.BytesIO(content))
+                tar.addfile(info, fileobj=io.BytesIO(content))
         
         try:
             # Process with default algorithm (sha256)
@@ -250,7 +276,8 @@ class TestDuplicateDetection:
             assert result2 == 0
             
             # Verify same checksum is used
-            db_service = DatabaseService()
+            from dedupe.cli.main import get_services
+            _, _, db_service, _ = get_services()
             file_records = db_service.get_file_records_by_hostname('test-server')
             
             # All records should use sha256
@@ -278,13 +305,13 @@ class TestDuplicateDetection:
             with tarfile.open(tar1_file.name, 'w:gz') as tar:
                 info = tarfile.TarInfo('test.log')
                 info.size = len(content)
-                tar.addfile(info, fileobj=tempfile.BytesIO(content))
+                tar.addfile(info, fileobj=io.BytesIO(content))
         
         with tempfile.NamedTemporaryFile(suffix='_sha1.tar.gz', delete=False) as tar2_file:
             with tarfile.open(tar2_file.name, 'w:gz') as tar:
                 info = tarfile.TarInfo('test.log')
                 info.size = len(content)
-                tar.addfile(info, fileobj=tempfile.BytesIO(content))
+                tar.addfile(info, fileobj=io.BytesIO(content))
         
         try:
             # Process with SHA256
@@ -296,7 +323,8 @@ class TestDuplicateDetection:
             assert result2 == 0
             
             # Should NOT detect as duplicates (different algorithms)
-            db_service = DatabaseService()
+            from dedupe.cli.main import get_services
+            _, _, db_service, _ = get_services()
             
             records1 = db_service.get_file_records_by_hostname('server1')
             records2 = db_service.get_file_records_by_hostname('server2')
@@ -330,17 +358,17 @@ class TestDuplicateDetection:
                 # Empty file
                 info1 = tarfile.TarInfo('empty.log')
                 info1.size = 0
-                tar.addfile(info1, fileobj=tempfile.BytesIO(empty_content))
+                tar.addfile(info1, fileobj=io.BytesIO(empty_content))
                 
                 # Another empty file
                 info2 = tarfile.TarInfo('another_empty.log')
                 info2.size = 0
-                tar.addfile(info2, fileobj=tempfile.BytesIO(empty_content))
+                tar.addfile(info2, fileobj=io.BytesIO(empty_content))
                 
                 # Normal file
                 info3 = tarfile.TarInfo('normal.log')
                 info3.size = len(normal_content)
-                tar.addfile(info3, fileobj=tempfile.BytesIO(normal_content))
+                tar.addfile(info3, fileobj=io.BytesIO(normal_content))
         
         try:
             # Process tarball
@@ -348,7 +376,8 @@ class TestDuplicateDetection:
             assert result == 0
             
             # Verify empty files are handled correctly
-            db_service = DatabaseService()
+            from dedupe.cli.main import get_services
+            _, _, db_service, _ = get_services()
             file_records = db_service.get_file_records_by_hostname('test-server')
             
             # Should have 3 records

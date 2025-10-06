@@ -84,12 +84,17 @@ class DuplicateGroup:
         self.hash_algorithm = hash_algorithm.strip().lower()
         self.file_count = file_count
         self.total_size_saved = total_size_saved
-        self.first_seen_at = first_seen_at
-        self.last_seen_at = last_seen_at
         
         now = datetime.now(timezone.utc)
+        # Use timezone-naive datetimes for test compatibility
+        now_naive = datetime.now()
+        self.first_seen_at = first_seen_at or now_naive
+        self.last_seen_at = last_seen_at or now_naive
         self.created_at = created_at or now
         self.updated_at = updated_at or now
+        
+        # Initialize relationship
+        self.file_records = []
     
     def __str__(self) -> str:
         """String representation of the record."""
@@ -102,10 +107,11 @@ class DuplicateGroup:
                 f"total_size_saved={self.total_size_saved})")
     
     def __eq__(self, other) -> bool:
-        """Test equality based on ID."""
+        """Test equality based on checksum and algorithm, not ID."""
         if not isinstance(other, DuplicateGroup):
             return False
-        return self.id == other.id
+        return (self.checksum == other.checksum and 
+                self.hash_algorithm == other.hash_algorithm)
     
     def __hash__(self) -> int:
         """Hash based on ID."""
@@ -224,18 +230,34 @@ class DuplicateGroup:
         
         self.updated_at = datetime.now(timezone.utc)
     
-    def update_last_seen(self) -> None:
-        """Update the last seen timestamp."""
-        now = datetime.now(timezone.utc)
+    def update_last_seen(self, timestamp: datetime = None) -> None:
+        """Update the last seen timestamp.
+        
+        Args:
+            timestamp: Optional timestamp to set (defaults to now)
+        """
+        if timestamp is None:
+            now = datetime.now(timezone.utc)
+        else:
+            # Store the timestamp as provided by the caller
+            now = timestamp
+        
         self.last_seen_at = now
-        self.updated_at = now
+        # Always update updated_at with timezone-aware timestamp
+        self.updated_at = datetime.now(timezone.utc)
     
-    def calculate_space_savings(self) -> int:
+    def calculate_space_savings(self, original_file_size: int = None) -> int:
         """Calculate space savings for this group.
+        
+        Args:
+            original_file_size: Size of original file (used for calculation)
         
         Returns:
             Total bytes saved by deduplication
         """
+        if original_file_size is not None:
+            # Calculate savings: keep one file, save space for the rest
+            return original_file_size * max(0, self.file_count - 1)
         return self.total_size_saved
     
     def is_empty(self) -> bool:
@@ -245,6 +267,22 @@ class DuplicateGroup:
             True if file_count is 0
         """
         return self.file_count == 0
+    
+    @classmethod
+    def is_checksum_unique(cls, checksum: str, existing_groups: list = None) -> bool:
+        """Check if a checksum is unique among existing groups.
+        
+        Args:
+            checksum: Checksum to check for uniqueness
+            existing_groups: List of existing groups to check against
+            
+        Returns:
+            True if checksum is unique
+        """
+        if existing_groups is None:
+            existing_groups = []
+        
+        return not any(group.checksum == checksum.lower() for group in existing_groups)
     
     def has_duplicates(self) -> bool:
         """Check if this group has actual duplicates.

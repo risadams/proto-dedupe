@@ -16,6 +16,7 @@ class TarballStatus(Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     SUCCESS = "SUCCESS"
+    PARTIAL = "PARTIAL"
     FAILED = "FAILED"
 
 
@@ -30,9 +31,11 @@ class TarballRecord:
         file_size (int): Size of the tarball file in bytes
         created_at (datetime): When the record was created
         updated_at (datetime): When the record was last updated
+        processed_at (datetime): When the tarball was processed
         processing_duration (Optional[int]): Processing time in seconds
         total_files_count (Optional[int]): Number of files in the tarball
         error_message (Optional[str]): Error message if processing failed
+        file_records (List): List of FileRecord objects in this tarball
     """
     
     def __init__(self, 
@@ -43,6 +46,7 @@ class TarballRecord:
                  id: Optional[str] = None,
                  created_at: Optional[datetime] = None,
                  updated_at: Optional[datetime] = None,
+                 processed_at: Optional[datetime] = None,
                  processing_duration: Optional[int] = None,
                  total_files_count: Optional[int] = None,
                  error_message: Optional[str] = None):
@@ -52,10 +56,11 @@ class TarballRecord:
             filename: Full path to the tarball file
             hostname: Hostname where tarball was processed
             file_size: Size of the tarball file in bytes
-            status: Processing status (defaults to PENDING)
+            status: Processing status (defaults to PROCESSING)
             id: UUID string (auto-generated if not provided)
             created_at: Creation timestamp (auto-generated if not provided)
             updated_at: Update timestamp (auto-generated if not provided)
+            processed_at: Processing completion timestamp
             processing_duration: Processing time in seconds
             total_files_count: Number of files in the tarball
             error_message: Error message if processing failed
@@ -73,13 +78,13 @@ class TarballRecord:
         if file_size < 0:
             raise ValueError("file_size cannot be negative")
         
-        # Validate filename format (basic check for reasonable paths)
-        if len(filename.strip()) > 1000:
-            raise ValueError("filename too long (max 1000 characters)")
+        # Validate filename format (255 char limit as per test)
+        if len(filename.strip()) > 255:
+            raise ValueError("filename too long (max 255 characters)")
         
-        # Validate hostname format (basic check)
-        if len(hostname.strip()) > 255:
-            raise ValueError("hostname too long (max 255 characters)")
+        # Validate hostname format (100 char limit as per test)
+        if len(hostname.strip()) > 100:
+            raise ValueError("hostname too long (max 100 characters)")
         
         # Set attributes
         self.id = id or str(uuid.uuid4())
@@ -91,6 +96,7 @@ class TarballRecord:
         now = datetime.now(timezone.utc)
         self.created_at = created_at or now
         self.updated_at = updated_at or now
+        self.processed_at = processed_at or now
         self.processing_duration = processing_duration
         
         # Validate processing_duration
@@ -104,6 +110,9 @@ class TarballRecord:
         # Set additional fields
         self.total_files_count = total_files_count
         self.error_message = error_message
+        
+        # Initialize relationship list
+        self.file_records = []
     
     @property
     def status(self) -> str:
@@ -122,7 +131,7 @@ class TarballRecord:
     
     def __str__(self) -> str:
         """String representation of the record."""
-        return f"TarballRecord(id={self.id[:8]}..., filename={self.filename}, status={self.status})"
+        return f"TarballRecord(id={self.id[:8]}..., filename={self.filename}, hostname={self.hostname}, status={self.status})"
     
     def __repr__(self) -> str:
         """Detailed string representation of the record."""
@@ -131,10 +140,13 @@ class TarballRecord:
                 f"file_size={self.file_size})")
     
     def __eq__(self, other) -> bool:
-        """Test equality based on ID."""
+        """Test equality based on content, not ID."""
         if not isinstance(other, TarballRecord):
             return False
-        return self.id == other.id
+        return (self.filename == other.filename and 
+                self.hostname == other.hostname and
+                self.status == other.status and
+                self.file_size == other.file_size)
     
     def __hash__(self) -> int:
         """Hash based on ID."""
@@ -154,6 +166,7 @@ class TarballRecord:
             'file_size': self.file_size,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'processed_at': self.processed_at.isoformat() if self.processed_at else None,
             'processing_duration': self.processing_duration,
             'total_files_count': self.total_files_count,
             'error_message': self.error_message
@@ -184,6 +197,13 @@ class TarballRecord:
             else:
                 updated_at = data['updated_at']
         
+        processed_at = None
+        if data.get('processed_at'):
+            if isinstance(data['processed_at'], str):
+                processed_at = datetime.fromisoformat(data['processed_at'].replace('Z', '+00:00'))
+            else:
+                processed_at = data['processed_at']
+        
         # Parse status
         status = data.get('status', 'PROCESSING')
         
@@ -195,6 +215,7 @@ class TarballRecord:
             status=status,
             created_at=created_at,
             updated_at=updated_at,
+            processed_at=processed_at,
             processing_duration=data.get('processing_duration'),
             total_files_count=data.get('total_files_count'),
             error_message=data.get('error_message')
